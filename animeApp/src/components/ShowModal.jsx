@@ -68,7 +68,7 @@ const CatchUp = ({ show }) => {
                     <div className="catchup__result">
                          <p>{state.summary}</p>
                          {state.note && <small>{state.note}</small>}
-                         {state.source === "claude" && !state.confident && (
+                         {state.source === "ai" && !state.confident && (
                               <small>Kept intentionally vague around episode boundaries to stay spoiler-safe.</small>
                          )}
                     </div>

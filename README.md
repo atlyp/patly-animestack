@@ -15,7 +15,7 @@ Deploy the repository root as a single Vercel project. The Vercel configuration 
 Set these Vercel project environment variables for Production and Preview:
 
 - `MONGO_URI` — MongoDB Atlas connection string for the database.
-- `ANTHROPIC_API_KEY` — optional; enables Claude-backed recommendations. The app has an offline recommendation fallback without it.
+- `GEMINI_API_KEY` — optional, free from aistudio.google.com; enables AI recommendations. The app has an offline recommendation fallback without it.
 
 No frontend API URL is required: the deployed app and API use the same domain.
 

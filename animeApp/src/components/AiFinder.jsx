@@ -163,9 +163,9 @@ export const AiFinder = () => {
                               })}
                          </div>
                          <p className="ai-results__source">
-                              {state.source === "claude"
-                                   ? "✦ Picked by Claude"
-                                   : "Matched by Yumemi's offline mood matcher — connect Claude on the server for smarter, free-form picks."}
+                              {state.source === "ai"
+                                   ? "✦ Picked by Gemini"
+                                   : "Matched by Yumemi's offline mood matcher — connect Gemini on the server for smarter, free-form picks."}
                          </p>
                     </div>
                )}

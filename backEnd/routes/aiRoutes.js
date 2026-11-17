@@ -1,6 +1,4 @@
 import express from "express";
-import Anthropic from "@anthropic-ai/sdk";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { CATALOG, BY_ID } from "../catalog.js";
 import { requireAuth } from "../auth.js";
@@ -27,41 +25,54 @@ const CATALOG_TEXT = CATALOG.map((s) =>
 ).join("\n");
 
 // ─────────────────────────────────────────────────────────────
-// Claude client — only used when credentials are configured.
+// Gemini (Google AI Studio free tier) — only used when GEMINI_API_KEY is set.
+// If the call fails or the free quota runs out, routes fall back to the offline matcher.
 // ─────────────────────────────────────────────────────────────
-const MODEL = "claude-opus-5-5";
-const hasKey = () => Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-let client = null;
-const getClient = () => (client ??= new Anthropic());
+const MODEL = process.env.GEMINI_MODEL || "gemini-flash-lite-latest";
+const hasKey = () => Boolean(process.env.GEMINI_API_KEY);
 
-const SYSTEM = [
-     {
-          type: "text",
-          text:
-               "You are the recommendation engine for Yumemi, an anime discovery site. " +
-               "You only recommend shows from the catalog below (one JSON object per line, `id` is the show id). " +
-               "Never invent ids. Write reasons in a warm, specific, spoiler-free voice: point to the tone, " +
-               "premise, pacing or themes that match what the viewer asked for. Keep each reason to one sentence.\n\n" +
-               "<catalog>\n" +
-               CATALOG_TEXT +
-               "\n</catalog>",
-          cache_control: { type: "ephemeral" },
-     },
-];
+const SYSTEM =
+     "You are the recommendation engine for Yumemi, an anime discovery site. " +
+     "You only recommend shows from the catalog below (one JSON object per line, `id` is the show id). " +
+     "Never invent ids. Write reasons in a warm, specific, spoiler-free voice: point to the tone, " +
+     "premise, pacing or themes that match what the viewer asked for. Keep each reason to one sentence.\n\n" +
+     "<catalog>\n" +
+     CATALOG_TEXT +
+     "\n</catalog>";
 
-async function askClaude(prompt, schema, { maxTokens = 4000 } = {}) {
-     const response = await getClient().beta.messages.parse({
-          model: MODEL,
-          max_tokens: maxTokens,
-          betas: ["server-side-fallback-2026-07-01"],
-          fallbacks: "default",
-          system: SYSTEM,
-          output_config: { effort: "low", format: betaZodOutputFormat(schema) },
-          messages: [{ role: "user", content: prompt }],
+// When the main model is busy (503) or out of free quota (429), try the other one once.
+const BACKUP_MODEL = process.env.GEMINI_BACKUP_MODEL || "gemini-flash-latest";
+
+async function askAI(prompt, schema, opts) {
+     try {
+          return await callGemini(MODEL, prompt, schema, opts);
+     } catch (e) {
+          if (![429, 500, 503].includes(e.status) || BACKUP_MODEL === MODEL) throw e;
+          console.warn(`[ai] ${MODEL} unavailable (${e.status}), trying ${BACKUP_MODEL}`);
+          return callGemini(BACKUP_MODEL, prompt, schema, opts);
+     }
+}
+
+async function callGemini(model, prompt, schema, { maxTokens = 4000 } = {}) {
+     const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY },
+          body: JSON.stringify({
+               systemInstruction: { parts: [{ text: SYSTEM }] },
+               contents: [{ role: "user", parts: [{ text: prompt }] }],
+               generationConfig: {
+                    maxOutputTokens: maxTokens,
+                    responseMimeType: "application/json",
+                    responseJsonSchema: { ...z.toJSONSchema(schema), $schema: undefined },
+               },
+          }),
+          signal: AbortSignal.timeout(25000),
      });
-     if (response.stop_reason === "refusal") throw new Error("Claude declined this request.");
-     if (!response.parsed_output) throw new Error("Claude returned an unreadable answer.");
-     return response.parsed_output;
+     const data = await resp.json().catch(() => ({}));
+     if (!resp.ok) throw Object.assign(new Error(data.error?.message || `Gemini returned ${resp.status}`), { status: resp.status });
+     const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("");
+     if (!text) throw new Error("Gemini returned an empty answer.");
+     return schema.parse(JSON.parse(text));
 }
 
 const PicksSchema = z.object({
@@ -175,21 +186,21 @@ function localRank(query, { exclude = new Set(), limit = 5 } = {}) {
 // Routes
 // ─────────────────────────────────────────────────────────────
 const router = express.Router();
-// AI calls can cost money once a key is configured, so only logged-in users may make them.
+// AI calls use the free Gemini quota, so only logged-in users may make them.
 router.use((req, res, next) => (req.path === "/status" ? next() : requireAuth(req, res, next)));
 
-const withFallback = async (res, claudeFn, localFn) => {
+const withFallback = async (res, aiFn, localFn) => {
      if (hasKey()) {
           try {
-               return res.json({ ...(await claudeFn()), source: "claude" });
+               return res.json({ ...(await aiFn()), source: "ai" });
           } catch (e) {
-               console.error("[ai] Claude call failed, using local matcher:", e?.status ?? "", e?.message);
+               console.error("[ai] Gemini call failed, using local matcher:", e?.status ?? "", e?.message);
           }
      }
      return res.json({ ...localFn(), source: "local" });
 };
 
-router.get("/status", (req, res) => res.json({ claude: hasKey(), model: MODEL, catalogSize: CATALOG.length }));
+router.get("/status", (req, res) => res.json({ ai: hasKey(), model: MODEL, catalogSize: CATALOG.length }));
 
 // 1 + 2. Describe-it search and mood buttons
 router.post("/find", async (req, res) => {
@@ -200,7 +211,7 @@ router.post("/find", async (req, res) => {
           res,
           () =>
                cached(`find:${query}:${[...exclude].sort()}`, async () => {
-                    const out = await askClaude(
+                    const out = await askAI(
                          `A viewer described what they want to watch:\n<request>${query}</request>\n\n` +
                               (exclude.size ? `They already have these ids saved, so skip them: ${[...exclude].join(", ")}.\n` : "") +
                               "Pick the 4 best matches from the catalog, best first. Respect anything they rule out " +
@@ -225,7 +236,7 @@ router.post("/because", async (req, res) => {
           res,
           () =>
                cached(`because:${[...saved].sort()}|${[...avoid].sort()}`, async () => {
-                    const out = await askClaude(
+                    const out = await askAI(
                          `This viewer saved these shows to their list: ${savedTitles.join("; ")} (ids ${saved.join(", ")}).\n` +
                               (avoidTitles.length ? `They dropped these partway through, so steer away from what they have in common: ${avoidTitles.join("; ")}.\n` : "") +
                               "Recommend 4 other shows from the catalog they'd likely love. Each reason must start with " +
@@ -267,7 +278,7 @@ router.post("/taste", async (req, res) => {
           res,
           () =>
                cached(`taste:${[...ids].sort()}`, () =>
-                    askClaude(
+                    askAI(
                          `A viewer's favorite shows: ${titles.join("; ")}.\n` +
                               "Write their anime taste profile for a shareable card. `title`: a fun 2-4 word archetype " +
                               "(like 'Cozy Chaos Enjoyer'). `blurb`: one playful sentence, max 22 words, no spoilers. " +
@@ -300,15 +311,15 @@ router.post("/catchup", async (req, res) => {
      const capped = show.episodes ? Math.min(episode, show.episodes) : episode;
      if (!hasKey()) {
           return res.json({
-               summary: `Episode-by-episode recaps need Claude connected on the server. Until then, the synopsis above only covers the opening setup of ${displayTitle(show)}, so it's safe to re-read.`,
+               summary: `Episode-by-episode recaps need AI connected on the server. Until then, the synopsis above only covers the opening setup of ${displayTitle(show)}, so it's safe to re-read.`,
                confident: false,
                source: "local",
-               note: "Add ANTHROPIC_API_KEY to backEnd/.env to turn on spoiler-safe recaps.",
+               note: "Add GEMINI_API_KEY to backEnd/.env to turn on spoiler-safe recaps.",
           });
      }
      try {
           const out = await cached(`catchup:${show.mal_id}:${capped}`, () =>
-               askClaude(
+               askAI(
                     `Recap "${displayTitle(show)}" (id ${show.mal_id}) for a viewer who has watched through episode ${capped}` +
                          (show.episodes ? ` of ${show.episodes}` : "") +
                          ".\nRules: describe ONLY what happens up to and including that episode. Never hint at later twists, " +
@@ -318,10 +329,10 @@ router.post("/catchup", async (req, res) => {
                     { maxTokens: 2000 },
                ),
           );
-          return res.json({ ...out, source: "claude" });
+          return res.json({ ...out, source: "ai" });
      } catch (e) {
           console.error("[ai] catch-up failed:", e?.message);
-          return res.json({ summary: show.synopsis, confident: false, source: "local", note: "Couldn't reach Claude, so here's the official synopsis." });
+          return res.json({ summary: show.synopsis, confident: false, source: "local", note: "Couldn't reach the AI, so here's the official synopsis." });
      }
 });
 
