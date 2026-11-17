@@ -24,6 +24,12 @@ const userSchema = new mongoose.Schema(
      },
      { timestamps: true },
 );
+// Never send the password hash to a client.
+const hidePassword = (doc, ret) => {
+     delete ret.password;
+     return ret;
+};
+userSchema.set("toJSON", { transform: hidePassword });
 
 const profileImageSchema = new mongoose.Schema({
       contentType: { type: String, required: true },

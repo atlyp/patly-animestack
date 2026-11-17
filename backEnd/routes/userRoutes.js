@@ -2,6 +2,7 @@ import express from "express";
 import bcrypt from "bcrypt";
 import multer from "multer";
 import User, { ProfileImage } from "../models/user.model.js";
+import { requireAuth, signToken } from "../auth.js";
 
 const router = express.Router();
 const maxImageSize = 4 * 1024 * 1024;
@@ -31,7 +32,8 @@ router.get("/uploads/:imageId", async (req, res, next) => {
      }
 });
 
-router.post("/profileImg/:userId", upload.single("photo"), async (req, res) => {
+// Upload a profile photo for the logged-in user.
+router.post("/profileImg", requireAuth, upload.single("photo"), async (req, res) => {
      if (!req.file) return res.status(400).json({ error: "Choose an image to upload." });
      try {
           const image = await ProfileImage.create({
@@ -39,7 +41,7 @@ router.post("/profileImg/:userId", upload.single("photo"), async (req, res) => {
                data: req.file.buffer,
           });
           const targetUser = await User.findByIdAndUpdate(
-               req.params.userId,
+               req.userId,
                { profileImgPath: image.id },
                { returnDocument: "after" },
           );
@@ -59,6 +61,9 @@ router.post("/newUser", async (req, res) => {
           return res.status(400).json({ error: "Missing required field(s)." });
      }
      try {
+          if (await User.exists({ username: req.body.username })) {
+               return res.status(409).json({ error: "That username is taken." });
+          }
           const hashedPassword = await bcrypt.hash(req.body.password, 10);
           const userCreated = new User({
                email: req.body.email,
@@ -67,7 +72,7 @@ router.post("/newUser", async (req, res) => {
                profileImgPath: req.body.profileImgPath || "none",
           });
           await userCreated.save();
-          return res.json({ data: userCreated });
+          return res.json({ data: userCreated, token: signToken(userCreated._id) });
      } catch (error) {
           return res.status(500).json({ error: "Unable to create account." });
      }
@@ -83,15 +88,18 @@ router.post("/signIn", async (req, res) => {
           if (!targetUser || !(await bcrypt.compare(password, targetUser.password))) {
                return res.status(401).json({ error: "Incorrect username or password." });
           }
-          return res.json({ success: true, data: targetUser });
+          return res.json({ success: true, data: targetUser, token: signToken(targetUser._id) });
      } catch (error) {
           return res.status(500).json({ error: "Unable to sign in." });
      }
 });
 
-router.get("/staySignedIn/:id", async (req, res) => {
+// The logged-in user's account (replaces the old /staySignedIn/:id, which
+// returned any account to anyone who knew its id).
+router.get("/me", requireAuth, async (req, res) => {
      try {
-          const userFound = await User.findById(req.params.id);
+          const userFound = await User.findById(req.userId);
+          if (!userFound) return res.status(401).json({ error: "Account not found. Please log in again." });
           return res.json({ data: userFound });
      } catch (error) {
           return res.status(500).json({ error: "Unable to retrieve account." });

@@ -2,7 +2,8 @@ import express from "express";
 import { showSchema } from "../models/user.model.js";
 import mongoose from "mongoose";
 import User from "../models/user.model.js";
-import { totalEpisodes } from "../catalog.js";
+import { BY_ID, totalEpisodes } from "../catalog.js";
+import { requireAuth } from "../auth.js";
 const Show = mongoose.model("Show", showSchema);
 
 const router = express.Router();
@@ -14,39 +15,49 @@ router.get("/getAllShows", async (req, res) => {
           return res.json({ error: e.message });
      }
 });
-router.post("/addToList", async (req, res) => {
-     const { showToAdd, userId } = req.body;
-     try {
-          const targetUser = await User.findById(userId);
-          if (targetUser.myShows.find((show) => show.mal_id == showToAdd.mal_id))
-               return res.json({ error: "this show is already in your list" });
-          const tUserAfter = await User.findByIdAndUpdate(
-               userId,
-               { myShows: [...targetUser.myShows, showToAdd] },
-               { returnDocument: "after" },
-          );
+// Every My List route acts on the logged-in user (from the token), never on an id the client sends.
+router.use(["/addToList", "/deleteFromMyList", "/progress"], requireAuth);
 
-          res.json({ data: tUserAfter });
+// Body: { mal_id }. Show details come from the catalog, not from the client.
+router.post("/addToList", async (req, res) => {
+     const malId = Number(req.body?.mal_id ?? req.body?.showToAdd?.mal_id);
+     const show = BY_ID.get(malId);
+     if (!show) return res.status(400).json({ error: "Unknown show." });
+     try {
+          const entry = {
+               mal_id: show.mal_id,
+               title: show.title,
+               title_japanese: show.title_japanese,
+               score: show.score,
+               scored_by: show.scored_by,
+               rank: show.rank,
+               members: show.members,
+               favorites: show.favorites,
+          };
+          // only adds if it's not already there, so double-clicks are harmless
+          await User.updateOne({ _id: req.userId, "myShows.mal_id": { $ne: malId } }, { $push: { myShows: entry } });
+          const user = await User.findById(req.userId);
+          if (!user) return res.status(401).json({ error: "Account not found. Please log in again." });
+          res.json({ data: user });
      } catch (e) {
-          res.json({ error: e.message });
+          res.status(500).json({ error: "Couldn't update your list." });
      }
 });
-router.delete("/deleteFromMyList/:userId", async (req, res) => {
-     const { userId } = req.params;
-     // console.log(req.body);
-     const { showsMalId } = req.body;
+
+// Body: { mal_id }
+router.delete("/deleteFromMyList", async (req, res) => {
+     const malId = Number(req.body?.mal_id ?? req.body?.showsMalId);
+     if (!Number.isInteger(malId)) return res.status(400).json({ error: "mal_id must be a number." });
      try {
-          const targetUser = await User.findById(userId);
-          const filteredShows = targetUser.myShows.filter((show) => show.mal_id !== parseInt(showsMalId));
-          console.log(filteredShows);
-          const updatedUser = await User.findByIdAndUpdate(
-               userId,
-               { myShows: [...filteredShows] },
+          const user = await User.findByIdAndUpdate(
+               req.userId,
+               { $pull: { myShows: { mal_id: malId } } },
                { returnDocument: "after" },
           );
-          res.json({ data: updatedUser });
+          if (!user) return res.status(401).json({ error: "Account not found. Please log in again." });
+          res.json({ data: user });
      } catch (error) {
-          res.json({ error: error.message });
+          res.status(500).json({ error: "Couldn't update your list." });
      }
 });
 
@@ -70,12 +81,11 @@ export const nextProgress = (current, total, patch) => {
      return { watched, status };
 };
 
-router.patch("/progress/:userId", async (req, res) => {
-     const { userId } = req.params;
+router.patch("/progress", async (req, res) => {
+     const userId = req.userId;
      const malId = Number(req.body?.mal_id);
      const { episodesWatched, status } = req.body || {};
 
-     if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ error: "Invalid user id." });
      if (!Number.isInteger(malId)) return res.status(400).json({ error: "mal_id must be a number." });
      if (episodesWatched === undefined && status === undefined)
           return res.status(400).json({ error: "Send episodesWatched and/or status." });
@@ -103,7 +113,7 @@ router.patch("/progress/:userId", async (req, res) => {
           );
           res.json({ data: updated.myShows[0], totalEpisodes: total });
      } catch (e) {
-          res.status(500).json({ error: e.message });
+          res.status(500).json({ error: "Couldn't save your progress." });
      }
 });
 

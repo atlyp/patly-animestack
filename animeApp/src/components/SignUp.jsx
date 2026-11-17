@@ -5,10 +5,9 @@ import Form from "react-bootstrap/Form";
 import InputGroup from "react-bootstrap/InputGroup";
 import Row from "react-bootstrap/Row";
 import { bothMatch } from "../../utilities";
-import { localStorageAdd } from "../../memoryUtils";
 import { Alert, Spinner } from "react-bootstrap";
 import { useNavigate } from "react-router";
-import { apiRequest } from "../api";
+import { saveSession, signUp as signUpRequest } from "../api";
 
 export const SignUp = ({ setSigningIn }) => {
      const [validated, setValidated] = useState(false);
@@ -33,19 +32,14 @@ export const SignUp = ({ setSigningIn }) => {
                if (!bothMatch(userSigningUp.password, userSigningUp.confirmPassword)) {
                     return window.alert("Your PASSWORDS DO NOT match");
                }
-               const data = await apiRequest("/user/newUser", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                         email: userSigningUp.email,
-                         password: userSigningUp.password,
-                         username: userSigningUp.username,
-                         profileImgPath: "none",
-                    }),
+               const data = await signUpRequest({
+                    email: userSigningUp.email,
+                    password: userSigningUp.password,
+                    username: userSigningUp.username,
+                    profileImgPath: "none",
                });
-               if (!data.data?._id) throw new Error("The account server returned an invalid response.");
-               localStorageAdd("personLoggedIn", data.data._id);
-               localStorageAdd("loggedIn", true);
+               if (!data.data?._id || !data.token) throw new Error("The account server returned an invalid response.");
+               saveSession(data.token);
                navigate("/dashboard");
           } catch (e) {
                console.error("Unable to create account:", e);

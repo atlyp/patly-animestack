@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { useState } from "react";
 import { Button, Form } from "react-bootstrap";
 import { useSelector } from "react-redux";
-import { API_BASE } from "../api";
+import { uploadProfileImage } from "../api";
 
 export const UploadFile = ( ) => {
      const [selectedFile, setSelectedFile] = useState(null);
@@ -31,9 +31,7 @@ export const UploadFile = ( ) => {
                body: formData,
           };
           try {
-               const resp = await fetch(`${API_BASE}/user/profileImg/${userLoggedIn._id}`, options);
-               const data = await resp.json();
-               if (!resp.ok || data.error) throw new Error(data.error || `Upload failed (${resp.status}).`);
+               await uploadProfileImage(selectedFile);
                window.location.reload();
                setSelectedFile(null);
           } catch (e) {

@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { CATALOG, BY_ID } from "../catalog.js";
+import { requireAuth } from "../auth.js";
 
 const names = (arr) => (arr || []).map((x) => x.name);
 const tagsOf = (s) => [...names(s.genres), ...names(s.themes), ...names(s.demographics)];
@@ -174,6 +175,8 @@ function localRank(query, { exclude = new Set(), limit = 5 } = {}) {
 // Routes
 // ─────────────────────────────────────────────────────────────
 const router = express.Router();
+// AI calls can cost money once a key is configured, so only logged-in users may make them.
+router.use((req, res, next) => (req.path === "/status" ? next() : requireAuth(req, res, next)));
 
 const withFallback = async (res, claudeFn, localFn) => {
      if (hasKey()) {

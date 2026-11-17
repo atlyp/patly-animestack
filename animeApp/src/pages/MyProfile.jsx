@@ -10,7 +10,7 @@ import { useState } from "react";
 import { ChangePfp } from "../components/ChangePfp.jsx";
 import { BecauseYouSaved } from "../components/BecauseYouSaved.jsx";
 import { TasteCard } from "../components/TasteCard.jsx";
-import { removeFromMyList, titleOf } from "../api";
+import { clearSession, removeFromMyList, titleOf } from "../api";
 import { ProgressControls } from "../components/ProgressControls.jsx";
 import { STATUSES, statusLabel } from "../progress";
 import { setFocusedShow } from "../redux/animeSlice";
@@ -34,8 +34,7 @@ export const MyProfile = () => {
      // KEEP logged in logic ^^
      const handleLogOut = () => {
           dispatch(logOut());
-          localStorage.removeItem("personLoggedIn");
-          localStorage.removeItem("loggedIn");
+          clearSession();
           navigate("/");
      };
      const removeShowFromMyList = async (theShow) => {

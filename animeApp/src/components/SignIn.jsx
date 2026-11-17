@@ -3,8 +3,7 @@ import { Alert, Button, FloatingLabel, Form, FormGroup, Spinner } from "react-bo
 import { useState } from "react";
 import { useDispatch } from "react-redux";
 import { logIn } from "../redux/userSlice";
-import { localStorageAdd } from "../../memoryUtils";
-import { apiRequest } from "../api";
+import { saveSession, signIn as signInRequest } from "../api";
 
 export const SignIn = ({ setSigningIn }) => {
      const [username, setUsername] = useState("");
@@ -18,18 +17,13 @@ export const SignIn = ({ setSigningIn }) => {
           setLoading(true);
           setError("");
           try {
-               const result = await apiRequest("/user/signIn", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ username, password }),
-               });
-               if (!result.data?._id) {
+               const result = await signInRequest(username, password);
+               if (!result.data?._id || !result.token) {
                     setError("The account server returned an invalid response.");
                     return;
                }
                dispatch(logIn(result.data));
-               localStorageAdd("personLoggedIn", result.data._id);
-               localStorageAdd("loggedIn", true);
+               saveSession(result.token);
                window.location.reload();
           } catch (e) {
                console.error("Unable to sign in:", e);

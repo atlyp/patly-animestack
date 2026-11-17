@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { ConditionalAvPic } from "./ConditionalAvPic";
 import { logOut } from "../redux/userSlice";
 import { useNavigate } from "react-router";
+import { clearSession } from "../api";
 
 export const Avatar = () => {
      const { userLoggedIn } = useSelector((state) => state.userKey);
@@ -32,8 +33,7 @@ export const Avatar = () => {
                     <NavDropdown.Item
                          eventKey="4.4"
                          onClick={() => {
-                              localStorage.removeItem("loggedIn");
-                              localStorage.removeItem("personLoggedIn");
+                              clearSession();
 
                               dispatch(logOut());
                               navigate("/");
