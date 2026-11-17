@@ -26,3 +26,5 @@ pnpm-debug.log*
 animeApp/public/userUploads/
 _backup_before_redesign/
 desktop.ini
+
+.vercel
