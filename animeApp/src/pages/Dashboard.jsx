@@ -5,7 +5,7 @@ import { useNavigate } from "react-router";
 import { localGet, signInOffMem } from "../../memoryUtils";
 import { logIn } from "../redux/userSlice";
 
-export const Dashboard = ({ catalogLoading, catalogError }) => {
+export const Dashboard = () => {
      const dispatch = useDispatch();
      const navigate = useNavigate();
      useEffect(() => {
@@ -20,7 +20,7 @@ export const Dashboard = ({ catalogLoading, catalogError }) => {
      }, []);
      return (
           <div>
-               <Animes catalogLoading={catalogLoading} catalogError={catalogError} />
+               <Animes />
           </div>
      );
 };

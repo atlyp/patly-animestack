@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CardEl } from "./CardEl.jsx";
 import { Button } from "react-bootstrap";
 import { useDispatch, useSelector } from "react-redux";
-import { cardsAnimate, sortFunctionality } from "../../utilities.js";
-import { setFocusedShow, setGenreFilter, toggleGenre } from "../redux/animeSlice.js";
+import { mergeShows, setFocusedShow, setGenreFilter, toggleGenre } from "../redux/animeSlice.js";
 import { AiFinder } from "./AiFinder.jsx";
 import { ContinueWatching } from "./ContinueWatching.jsx";
-
-const tagNames = (show) => [...(show.genres || []), ...(show.themes || [])].map((g) => g.name);
+import { Tonight } from "./Tonight.jsx";
+import { posterOf, searchCatalog } from "../api.js";
+import { GENRES, SORTS } from "../catalog.js";
 
 const SkeletonCard = () => (
      <div className="anime-grid__item">
@@ -23,37 +23,65 @@ const SkeletonCard = () => (
      </div>
 );
 
-function Animes({ catalogLoading, catalogError }) {
+const yearOf = (show) => show.year || (show.aired?.from ? new Date(show.aired.from).getFullYear() : "?");
+
+function Animes() {
      const dispatch = useDispatch();
-     const { shows, filteredShows, whatWasSearched, genreFilter, sortFilter } = useSelector((state) => state.animeKey);
+     const { whatWasSearched, genreFilter, sortFilter } = useSelector((state) => state.animeKey);
      const { userLoggedIn } = useSelector((state) => state.userKey);
+     const [tab, setTab] = useState("airing"); // airing | all
+     const [query, setQuery] = useState("");
+     const [results, setResults] = useState({ items: [], page: 1, hasNext: false, status: "loading" });
+     const browseRef = useRef(null);
+     const latest = useRef(0);
 
-     // Every selected genre/theme must be on the show (Action + Comedy = both).
-     const fShows = filteredShows
-          .filter((show) => genreFilter.every((g) => tagNames(show).includes(g)))
-          .sort((a, b) => sortFunctionality(a, b, sortFilter));
+     // wait for typing to pause before searching
+     useEffect(() => {
+          const t = setTimeout(() => setQuery(whatWasSearched.trim()), 350);
+          return () => clearTimeout(t);
+     }, [whatWasSearched]);
 
-     // Genre chips: the most common genres in the catalog
-     const genreChips = useMemo(() => {
-          const count = new Map();
-          shows.forEach((s) => (s.genres || []).forEach((g) => count.set(g.name, (count.get(g.name) || 0) + 1)));
-          return [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([name]) => name);
-     }, [shows]);
+     // searching or filtering by genre looks across everything, not just this season
+     const status = tab === "airing" && !query ? "airing" : "";
+     const params = { q: query, genres: genreFilter, sort: SORTS[sortFilter] || "popular", status };
+     const paramsKey = JSON.stringify(params);
 
-     const heroPicks = [...shows].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 3);
-     const cardRefs = useRef({});
+     const load = async (page) => {
+          const id = ++latest.current;
+          setResults((r) => ({ ...r, status: page === 1 ? "loading" : "more" }));
+          try {
+               const data = await searchCatalog({ ...params, page });
+               if (id !== latest.current) return;
+               dispatch(mergeShows(data.items));
+               setResults((r) => ({
+                    items: page === 1 ? data.items : [...r.items, ...data.items.filter((x) => !r.items.some((y) => y.mal_id === x.mal_id))],
+                    page,
+                    hasNext: data.hasNext,
+                    status: "done",
+               }));
+          } catch (e) {
+               if (id !== latest.current) return;
+               setResults((r) => ({
+                    ...r,
+                    status: "error",
+                    message: e instanceof TypeError ? "Can't reach the Yumemi server." : e.message,
+               }));
+          }
+     };
 
      useEffect(() => {
-          const allCards = Object.values(cardRefs.current);
-          cardsAnimate(
-               allCards,
-               "animation",
-               "500ms ease 0s 1 normal none running easeOut",
-               "600ms ease 0s 1 normal none running easeIn",
-          );
-     }, [sortFilter, genreFilter.join("|")]);
+          load(1);
+     }, [paramsKey]);
 
-     const showSkeletons = catalogLoading && !fShows.length && !catalogError;
+     const goAiring = () => {
+          setTab("airing");
+          dispatch(setGenreFilter("All"));
+          browseRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+     };
+
+     const { items } = results;
+     const heroPicks = items.slice(0, 3);
+     const heading = query ? `Results for “${query}”` : status === "airing" ? "Airing this season" : "Explore all anime";
 
      return (
           <main className="anime-library">
@@ -63,30 +91,47 @@ function Animes({ catalogLoading, catalogError }) {
                          <h1>
                               Find your next <span>anime obsession.</span>
                          </h1>
-                         <p>From all-time favorites to hidden gems, find a new story worth staying up for.</p>
+                         <p>Every anime, new episodes the day they drop, and where to stream them, all in one place.</p>
                     </div>
                     <div className="library-hero__stack" aria-hidden="true">
                          {heroPicks.map((show) => (
-                              <img key={show.mal_id} src={`/anime_covers/${show.mal_id}.jpg`} alt="" />
+                              <img key={show.mal_id} src={posterOf(show)} alt="" />
                          ))}
                     </div>
                </section>
+
+               <Tonight onBrowseAiring={goAiring} />
 
                <ContinueWatching />
 
                <AiFinder />
 
-               <section className="library-toolbar" aria-label="Catalog results">
+               <section className="library-toolbar" aria-label="Catalog results" ref={browseRef}>
                     <div>
                          <span className="section-kicker">The catalog</span>
-                         <h2>Explore anime</h2>
+                         <h2>{heading}</h2>
                     </div>
                     <div className="library-filters">
+                         {!query && (
+                              <div className="browse-tabs" role="tablist" aria-label="Which anime to show">
+                                   {[
+                                        ["airing", "Airing now"],
+                                        ["all", "All anime"],
+                                   ].map(([value, label]) => (
+                                        <button
+                                             key={value}
+                                             type="button"
+                                             role="tab"
+                                             aria-selected={tab === value}
+                                             className={`browse-tab ${tab === value ? "is-on" : ""}`}
+                                             onClick={() => setTab(value)}
+                                        >
+                                             {label}
+                                        </button>
+                                   ))}
+                              </div>
+                         )}
                          <span className="filter-pill">Sort: {sortFilter}</span>
-                         {whatWasSearched && <span className="filter-pill">Search: {whatWasSearched}</span>}
-                         <span className="result-count">
-                              {fShows.length} {fShows.length === 1 ? "title" : "titles"}
-                         </span>
                     </div>
                </section>
 
@@ -98,7 +143,7 @@ function Animes({ catalogLoading, catalogError }) {
                     >
                          All
                     </button>
-                    {genreChips.map((g) => (
+                    {GENRES.map((g) => (
                          <button
                               key={g}
                               type="button"
@@ -109,54 +154,42 @@ function Animes({ catalogLoading, catalogError }) {
                               {g}
                          </button>
                     ))}
-                    {genreFilter
-                         .filter((g) => !genreChips.includes(g))
-                         .map((g) => (
-                              <button key={g} type="button" className="genre-chip is-on" onClick={() => dispatch(toggleGenre(g))}>
-                                   {g} ×
-                              </button>
-                         ))}
                </div>
 
                <div className="anime-grid">
-                    {catalogError ? (
+                    {results.status === "error" && !items.length ? (
                          <div className="empty-results" role="alert">
-                              <h3>We couldn’t load the anime catalog.</h3>
-                              <p>{catalogError} Check that the local anime JSON files are available, then refresh.</p>
+                              <h3>We couldn’t load anime right now.</h3>
+                              <p>{results.message} Try again in a moment.</p>
                          </div>
-                    ) : showSkeletons ? (
+                    ) : results.status === "loading" ? (
                          Array.from({ length: 8 }, (_, i) => <SkeletonCard key={i} />)
-                    ) : fShows?.length ? (
-                         fShows.map((show) => {
-                              const showsStartYear = new Date(show.aired.from).getFullYear();
-                              return (
-                                   <div className="anime-grid__item" key={show.mal_id}>
-                                        <CardEl
-                                             refVar={(el) => (cardRefs.current[show.title] = el)}
-                                             user={userLoggedIn}
-                                             showItself={show}
-                                             year={showsStartYear}
-                                             altText={show.title}
-                                             product={show}
-                                        >
-                                             <Button
-                                                  className="moreInfoBtn"
-                                                  variant="primary"
-                                                  onClick={() => dispatch(setFocusedShow(show))}
-                                             >
-                                                  More about this {show?.type == "TV" ? "show" : "movie"}
-                                             </Button>
-                                        </CardEl>
-                                   </div>
-                              );
-                         })
+                    ) : items.length ? (
+                         items.map((show) => (
+                              <div className="anime-grid__item" key={show.mal_id}>
+                                   <CardEl user={userLoggedIn} showItself={show} year={yearOf(show)} altText={show.title} product={show}>
+                                        <Button className="moreInfoBtn" variant="primary" onClick={() => dispatch(setFocusedShow(show))}>
+                                             More about this {show?.type === "Movie" ? "movie" : "show"}
+                                        </Button>
+                                   </CardEl>
+                              </div>
+                         ))
                     ) : (
                          <div className="empty-results">
                               <h3>No anime matches all of those.</h3>
-                              <p>Try removing a genre — or describe what you want to Yumemi AI above.</p>
+                              <p>Try removing a genre, or describe what you want to Yumemi AI above.</p>
                          </div>
                     )}
                </div>
+
+               {results.hasNext && results.status !== "loading" && (
+                    <div className="load-more">
+                         <button type="button" className="ghost-btn" disabled={results.status === "more"} onClick={() => load(results.page + 1)}>
+                              {results.status === "more" ? "Loading…" : "Load more"}
+                         </button>
+                    </div>
+               )}
+               {results.status === "error" && items.length > 0 && <p className="ai-finder__error">{results.message}</p>}
           </main>
      );
 }

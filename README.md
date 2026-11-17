@@ -1,4 +1,9 @@
-# Anime Stack
+# Yumemi
+
+Anime discovery and tracking: search every anime, see which saved shows have a new episode tonight, find where to stream them, and get AI picks from a plain-English description.
+
+- **Catalog:** [AniList](https://anilist.co)'s free GraphQL API (no key needed), cached in memory, in MongoDB and at Vercel's CDN because AniList allows about 30 requests a minute.
+- **AI:** Google Gemini's free tier, with an offline matcher as a fallback.
 
 ## Local development
 
@@ -15,6 +20,7 @@ Deploy the repository root as a single Vercel project. The Vercel configuration 
 Set these Vercel project environment variables for Production and Preview:
 
 - `MONGO_URI` — MongoDB Atlas connection string for the database.
+- `JWT_SECRET` — long random string used to sign login tokens.
 - `GEMINI_API_KEY` — optional, free from aistudio.google.com; enables AI recommendations. The app has an offline recommendation fallback without it.
 
 No frontend API URL is required: the deployed app and API use the same domain.

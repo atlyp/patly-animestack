@@ -2,43 +2,27 @@ import express from "express";
 import { z } from "zod";
 import { CATALOG, BY_ID } from "../catalog.js";
 import { requireAuth } from "../auth.js";
+import { getByMalIds, getShow, resolveTitles, slim } from "../anilist.js";
 
 const names = (arr) => (arr || []).map((x) => x.name);
 const tagsOf = (s) => [...names(s.genres), ...names(s.themes), ...names(s.demographics)];
 const displayTitle = (s) => s.title_english || s.title;
-const yearOf = (s) => s.year || (s.aired?.from ? new Date(s.aired.from).getFullYear() : null);
-
-// Compact, stable text version of the catalog for the model (kept byte-identical
-// between requests so prompt caching hits).
-const CATALOG_TEXT = CATALOG.map((s) =>
-     JSON.stringify({
-          id: s.mal_id,
-          title: displayTitle(s),
-          type: s.type,
-          episodes: s.episodes,
-          year: yearOf(s),
-          score: s.score,
-          rating: s.rating,
-          tags: tagsOf(s),
-          synopsis: s.synopsis,
-     }),
-).join("\n");
 
 // ─────────────────────────────────────────────────────────────
 // Gemini (Google AI Studio free tier) — only used when GEMINI_API_KEY is set.
-// If the call fails or the free quota runs out, routes fall back to the offline matcher.
+// Gemini suggests real titles from its own knowledge; each one is then looked up on
+// AniList so every pick is a real catalog entry with a poster and details.
+// If anything fails or the free quota runs out, routes fall back to the offline matcher.
 // ─────────────────────────────────────────────────────────────
 const MODEL = process.env.GEMINI_MODEL || "gemini-flash-lite-latest";
 const hasKey = () => Boolean(process.env.GEMINI_API_KEY);
 
 const SYSTEM =
-     "You are the recommendation engine for Yumemi, an anime discovery site. " +
-     "You only recommend shows from the catalog below (one JSON object per line, `id` is the show id). " +
-     "Never invent ids. Write reasons in a warm, specific, spoiler-free voice: point to the tone, " +
-     "premise, pacing or themes that match what the viewer asked for. Keep each reason to one sentence.\n\n" +
-     "<catalog>\n" +
-     CATALOG_TEXT +
-     "\n</catalog>";
+     "You are the recommendation engine for Yumemi, an anime discovery site, and you know anime deeply. " +
+     "Only recommend anime that really exist. For each pick give its official title exactly as listed on " +
+     "AniList or MyAnimeList (English or romaji) and its start year. Prefer the first season of a series unless " +
+     "asked otherwise. Write reasons in a warm, specific, spoiler-free voice: point to the tone, premise, pacing " +
+     "or themes that match what the viewer asked for. Keep each reason to one sentence. Never recommend hentai.";
 
 // When the main model is busy (503) or out of free quota (429), try the other one once.
 const BACKUP_MODEL = process.env.GEMINI_BACKUP_MODEL || "gemini-flash-latest";
@@ -66,7 +50,7 @@ async function callGemini(model, prompt, schema, { maxTokens = 4000 } = {}) {
                     responseJsonSchema: { ...z.toJSONSchema(schema), $schema: undefined },
                },
           }),
-          signal: AbortSignal.timeout(25000),
+          signal: AbortSignal.timeout(12000),
      });
      const data = await resp.json().catch(() => ({}));
      if (!resp.ok) throw Object.assign(new Error(data.error?.message || `Gemini returned ${resp.status}`), { status: resp.status });
@@ -77,19 +61,29 @@ async function callGemini(model, prompt, schema, { maxTokens = 4000 } = {}) {
 
 const PicksSchema = z.object({
      intro: z.string(),
-     picks: z.array(z.object({ id: z.number().int(), reason: z.string() })),
+     picks: z.array(z.object({ title: z.string(), year: z.number().int().nullable(), reason: z.string() })),
 });
 
-// Keep only real ids, no duplicates, no excluded shows.
-const cleanPicks = (picks, exclude = new Set(), limit = 5) => {
+// Turn the model's titles into real catalog entries; drop ones we can't find or the viewer already has.
+async function toCatalogPicks(picks, exclude = new Set(), limit = 4) {
+     const shows = await resolveTitles(picks.map((p) => p.title));
      const seen = new Set();
-     return picks
-          .filter((p) => BY_ID.has(p.id) && !exclude.has(p.id) && !seen.has(p.id) && seen.add(p.id))
-          .slice(0, limit)
-          .map((p) => ({ mal_id: p.id, reason: p.reason }));
-};
+     const out = [];
+     picks.forEach((p, i) => {
+          const show = shows[i];
+          if (!show || show.isAdult || exclude.has(show.mal_id) || seen.has(show.mal_id)) return;
+          seen.add(show.mal_id);
+          out.push({ mal_id: show.mal_id, reason: p.reason, show: slim(show) });
+     });
+     return out.slice(0, limit);
+}
+// Offline picks come from the bundled catalog; attach the show so the client can render it.
+const withShows = (result) => ({
+     ...result,
+     picks: result.picks.map((p) => ({ ...p, show: slim(BY_ID.get(p.mal_id)) })),
+});
 
-// Small in-memory cache so repeated identical asks don't cost anything.
+// Small in-memory cache so repeated identical asks don't use quota.
 const cache = new Map();
 const cached = async (key, fn) => {
      if (cache.has(key)) return cache.get(key);
@@ -186,13 +180,14 @@ function localRank(query, { exclude = new Set(), limit = 5 } = {}) {
 // Routes
 // ─────────────────────────────────────────────────────────────
 const router = express.Router();
-// AI calls use the free Gemini quota, so only logged-in users may make them.
+// Only logged-in users may use the AI (it spends the free Gemini quota).
 router.use((req, res, next) => (req.path === "/status" ? next() : requireAuth(req, res, next)));
 
 const withFallback = async (res, aiFn, localFn) => {
      if (hasKey()) {
           try {
-               return res.json({ ...(await aiFn()), source: "ai" });
+               const result = await aiFn();
+               if (!result.picks || result.picks.length) return res.json({ ...result, source: "ai" });
           } catch (e) {
                console.error("[ai] Gemini call failed, using local matcher:", e?.status ?? "", e?.message);
           }
@@ -200,70 +195,78 @@ const withFallback = async (res, aiFn, localFn) => {
      return res.json({ ...localFn(), source: "local" });
 };
 
-router.get("/status", (req, res) => res.json({ ai: hasKey(), model: MODEL, catalogSize: CATALOG.length }));
+router.get("/status", (req, res) => res.json({ ai: hasKey(), model: MODEL, catalog: "anilist" }));
+
+const idList = (v) => (Array.isArray(v) ? v : []).map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 200);
+const titlesFor = async (ids) => {
+     const shows = await getByMalIds(ids.slice(0, 40));
+     return ids.map((id) => shows.get(id)).filter(Boolean).map(displayTitle);
+};
 
 // 1 + 2. Describe-it search and mood buttons
 router.post("/find", async (req, res) => {
      const query = String(req.body?.query || "").trim().slice(0, 500);
      if (!query) return res.status(400).json({ error: "Tell me what you're in the mood for." });
-     const exclude = new Set((req.body?.exclude || []).map(Number));
+     const exclude = new Set(idList(req.body?.exclude));
      return withFallback(
           res,
           () =>
                cached(`find:${query}:${[...exclude].sort()}`, async () => {
                     const out = await askAI(
                          `A viewer described what they want to watch:\n<request>${query}</request>\n\n` +
-                              (exclude.size ? `They already have these ids saved, so skip them: ${[...exclude].join(", ")}.\n` : "") +
-                              "Pick the 4 best matches from the catalog, best first. Respect anything they rule out " +
-                              "(e.g. 'not too sad', 'short'). `intro` is one short friendly sentence summarizing the vibe you searched for.",
+                              "Suggest the 7 best-matching anime, best first (a few extra in case some are already on their list). " +
+                              "Respect anything they rule out (e.g. 'not too sad', 'short'). Mix well-known favorites with a hidden gem or two. " +
+                              "`intro` is one short friendly sentence summarizing the vibe you searched for.",
                          PicksSchema,
                     );
-                    return { intro: out.intro, picks: cleanPicks(out.picks, exclude, 4) };
+                    return { intro: out.intro, picks: await toCatalogPicks(out.picks, exclude, 4) };
                }),
-          () => localRank(query, { exclude, limit: 4 }),
+          () => withShows(localRank(query, { exclude, limit: 4 })),
      );
 });
 
 // 3. "Because you saved X…"
 router.post("/because", async (req, res) => {
-     const saved = (req.body?.savedIds || []).map(Number).filter((id) => BY_ID.has(id));
-     const avoid = (req.body?.avoidIds || []).map(Number).filter((id) => BY_ID.has(id));
+     const saved = idList(req.body?.savedIds);
+     const avoid = idList(req.body?.avoidIds);
      if (!saved.length) return res.json({ intro: "", picks: [], source: "none" });
      const exclude = new Set([...saved, ...avoid]);
-     const avoidTitles = avoid.map((id) => displayTitle(BY_ID.get(id)));
-     const savedTitles = saved.map((id) => displayTitle(BY_ID.get(id)));
      return withFallback(
           res,
           () =>
                cached(`because:${[...saved].sort()}|${[...avoid].sort()}`, async () => {
+                    const [savedTitles, avoidTitles] = await Promise.all([titlesFor(saved), titlesFor(avoid)]);
+                    if (!savedTitles.length) throw new Error("Couldn't look up the saved shows.");
                     const out = await askAI(
-                         `This viewer saved these shows to their list: ${savedTitles.join("; ")} (ids ${saved.join(", ")}).\n` +
+                         `This viewer saved these shows to their list: ${savedTitles.join("; ")}.\n` +
                               (avoidTitles.length ? `They dropped these partway through, so steer away from what they have in common: ${avoidTitles.join("; ")}.\n` : "") +
-                              "Recommend 4 other shows from the catalog they'd likely love. Each reason must start with " +
+                              "Recommend 7 other anime they'd likely love (not ones already listed). Each reason must start with " +
                               "'Because you saved <one of their titles>,' and explain the connection. " +
                               "`intro` is one short sentence about their taste.",
                          PicksSchema,
                     );
-                    return { intro: out.intro, picks: cleanPicks(out.picks, exclude, 4) };
+                    return { intro: out.intro, picks: await toCatalogPicks(out.picks, exclude, 4) };
                }),
           () => {
-               // Build a pseudo-query from the saved shows' tags, then explain via shared tags.
+               // Offline: rank the bundled catalog by the saved shows' tags.
+               const known = saved.filter((id) => BY_ID.has(id));
+               if (!known.length) return { intro: "Save a few more shows and recommendations will appear here.", picks: [] };
                const tagCount = new Map();
-               saved.forEach((id) => tagsOf(BY_ID.get(id)).forEach((t) => tagCount.set(t, (tagCount.get(t) || 0) + 1)));
+               known.forEach((id) => tagsOf(BY_ID.get(id)).forEach((t) => tagCount.set(t, (tagCount.get(t) || 0) + 1)));
                const ranked = CATALOG.filter((s) => !exclude.has(s.mal_id))
                     .map((s) => ({ s, score: tagsOf(s).reduce((n, t) => n + (tagCount.get(t) || 0), 0) + (s.score || 0) / 10 }))
                     .sort((a, b) => b.score - a.score)
                     .slice(0, 4);
                const picks = ranked.map(({ s }) => {
                     const tags = new Set(tagsOf(s));
-                    const anchor = saved.map((id) => BY_ID.get(id)).sort((a, b) => tagsOf(b).filter((t) => tags.has(t)).length - tagsOf(a).filter((t) => tags.has(t)).length)[0];
+                    const anchor = known.map((id) => BY_ID.get(id)).sort((a, b) => tagsOf(b).filter((t) => tags.has(t)).length - tagsOf(a).filter((t) => tags.has(t)).length)[0];
                     const shared = tagsOf(anchor).filter((t) => tags.has(t)).slice(0, 2);
                     return {
                          mal_id: s.mal_id,
                          reason: `Because you saved ${displayTitle(anchor)}${shared.length ? ` — it shares the ${shared.join(" & ").toLowerCase()} feel` : ""}.`,
                     };
                });
-               return { intro: "Picked from the genres and themes you keep coming back to.", picks };
+               return withShows({ intro: "Picked from the genres and themes you keep coming back to.", picks });
           },
      );
 });
@@ -271,15 +274,17 @@ router.post("/because", async (req, res) => {
 // 6. Shareable taste card
 const TasteSchema = z.object({ title: z.string(), blurb: z.string(), traits: z.array(z.string()) });
 router.post("/taste", async (req, res) => {
-     const ids = (req.body?.ids || []).map(Number).filter((id) => BY_ID.has(id)).slice(0, 8);
+     const ids = idList(req.body?.ids).slice(0, 8);
      if (!ids.length) return res.status(400).json({ error: "Save a few shows first." });
-     const titles = ids.map((id) => displayTitle(BY_ID.get(id)));
+     const shows = await getByMalIds(ids).catch(() => new Map());
+     const list = ids.map((id) => shows.get(id) || BY_ID.get(id)).filter(Boolean);
+     if (!list.length) return res.status(400).json({ error: "Couldn't look up your saved shows." });
      return withFallback(
           res,
           () =>
                cached(`taste:${[...ids].sort()}`, () =>
                     askAI(
-                         `A viewer's favorite shows: ${titles.join("; ")}.\n` +
+                         `A viewer's favorite shows: ${list.map(displayTitle).join("; ")}.\n` +
                               "Write their anime taste profile for a shareable card. `title`: a fun 2-4 word archetype " +
                               "(like 'Cozy Chaos Enjoyer'). `blurb`: one playful sentence, max 22 words, no spoilers. " +
                               "`traits`: exactly 3 one- or two-word taste traits.",
@@ -290,7 +295,7 @@ router.post("/taste", async (req, res) => {
           () => {
                const count = new Map();
                const META = new Set(["Award Winning", "Shounen", "Seinen", "Shoujo", "Josei", "Kids"]);
-               ids.forEach((id) => tagsOf(BY_ID.get(id)).filter((t) => !META.has(t)).forEach((t) => count.set(t, (count.get(t) || 0) + 1)));
+               list.forEach((s) => tagsOf(s).filter((t) => !META.has(t)).forEach((t) => count.set(t, (count.get(t) || 0) + 1)));
                const top = [...count.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
                const [a = "Story", b = "Adventure"] = top;
                return {
@@ -305,7 +310,7 @@ router.post("/taste", async (req, res) => {
 // 7. Spoiler-free catch-up
 const CatchUpSchema = z.object({ summary: z.string(), confident: z.boolean() });
 router.post("/catchup", async (req, res) => {
-     const show = BY_ID.get(Number(req.body?.mal_id));
+     const show = await getShow(Number(req.body?.mal_id)).catch(() => null);
      const episode = Math.max(1, parseInt(req.body?.episode, 10) || 1);
      if (!show) return res.status(404).json({ error: "Unknown show." });
      const capped = show.episodes ? Math.min(episode, show.episodes) : episode;
@@ -320,7 +325,7 @@ router.post("/catchup", async (req, res) => {
      try {
           const out = await cached(`catchup:${show.mal_id}:${capped}`, () =>
                askAI(
-                    `Recap "${displayTitle(show)}" (id ${show.mal_id}) for a viewer who has watched through episode ${capped}` +
+                    `Recap the anime "${displayTitle(show)}" (${show.year || "?"}, ${show.type}) for a viewer who has watched through episode ${capped}` +
                          (show.episodes ? ` of ${show.episodes}` : "") +
                          ".\nRules: describe ONLY what happens up to and including that episode. Never hint at later twists, " +
                          "deaths, reveals or who wins. 4-6 sentences, plain prose. If you are not sure exactly where an " +

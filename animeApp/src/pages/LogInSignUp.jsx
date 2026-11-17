@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { SignIn } from "../components/SignIn";
 import { SignUp } from "../components/SignUp";
 import { localGet, signInOffMem } from "../../memoryUtils";
-import { useDispatch, useSelector } from "react-redux";
+import { useDispatch } from "react-redux";
 import { logIn } from "../redux/userSlice";
 import { useNavigate } from "react-router";
 import { LogoMark } from "../components/Logo";
@@ -11,7 +11,14 @@ export const LogInSignUp = () => {
      const [loggingIn, setLoggingIn] = useState(true);
      const dispatch = useDispatch();
      const navigate = useNavigate();
-     const { shows } = useSelector((state) => state.animeKey);
+     // The poster collage uses the bundled covers so the sign-in page loads instantly.
+     const [shows, setShows] = useState([]);
+     useEffect(() => {
+          fetch("/anime.json")
+               .then((r) => r.json())
+               .then((d) => setShows(d.data || []))
+               .catch(() => {});
+     }, []);
      useEffect(() => {
           if (localGet("loggedIn")) {
                console.log("someone logged in");

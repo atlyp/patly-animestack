@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import Modal from "react-bootstrap/Modal";
 import { useDispatch, useSelector } from "react-redux";
-import { setFocusedShow } from "../redux/animeSlice";
-import { aiCatchUp, posterOf, titleOf } from "../api";
+import { mergeShows, setFocusedShow } from "../redux/animeSlice";
+import { aiCatchUp, getAnime, posterOf, titleOf } from "../api";
 import { ListButton } from "./ListButton";
+import { untilText } from "../catalog";
 
 // Turn the catalog's embed URL into a muted, non-autoplaying player URL.
 const trailerSrc = (show) => {
@@ -78,14 +79,61 @@ const CatchUp = ({ show }) => {
      );
 };
 
+// Streaming services (from AniList) + when the next episode airs.
+const WatchOn = ({ show, loading }) => {
+     const next = show.nextAiring;
+     const links = show.streaming || [];
+     return (
+          <section className="watch-on" aria-label="Where to watch">
+               <h3>Where to watch</h3>
+               {links.length ? (
+                    <div className="watch-on__list">
+                         {links.map((l) => (
+                              <a key={l.name} className="watch-on__link" href={l.url} target="_blank" rel="noopener noreferrer">
+                                   ▶ {l.name}
+                              </a>
+                         ))}
+                    </div>
+               ) : (
+                    <p className="show-modal__note">{loading ? "Checking streaming services…" : "No streaming links listed yet."}</p>
+               )}
+               {links.length > 0 && <small>Availability depends on your country.</small>}
+               {next?.at && (
+                    <span className="next-ep">
+                         ◷ Episode {next.episode} airs {untilText(next.at, Date.now())} ·{" "}
+                         {new Date(next.at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                    </span>
+               )}
+          </section>
+     );
+};
+
 export const ShowModal = () => {
      const dispatch = useDispatch();
      const show = useSelector((s) => s.animeKey.focusedShow);
      const [last, setLast] = useState(null);
+     const [detailsFor, setDetailsFor] = useState(null);
      // keep content rendered while the modal fades out
      useEffect(() => {
           if (show) setLast(show);
      }, [show]);
+     // fetch the full, current details (streaming links, next episode, trailer…)
+     const focusedId = show?.mal_id;
+     useEffect(() => {
+          if (!focusedId) return;
+          let live = true;
+          setDetailsFor(null);
+          getAnime(focusedId)
+               .then(({ data }) => {
+                    if (!live) return;
+                    dispatch(mergeShows([data]));
+                    setDetailsFor(focusedId);
+               })
+               .catch(() => live && setDetailsFor(focusedId));
+          return () => {
+               live = false;
+          };
+     }, [focusedId]);
      const s = show || last;
      const close = () => dispatch(setFocusedShow(null));
      if (!s) return null;
@@ -136,6 +184,8 @@ export const ShowModal = () => {
                          </div>
                     </div>
 
+                    <WatchOn show={s} loading={detailsFor !== s.mal_id} />
+
                     <p className="show-modal__synopsis">{s.synopsis}</p>
 
                     <div className="tag-row">
@@ -159,8 +209,12 @@ export const ShowModal = () => {
                                    <dd>{s.producers.map((x) => x.name).join(", ")}</dd>
                               </>
                          )}
-                         <dt>Rating</dt>
-                         <dd>{s.rating}</dd>
+                         {s.rating && (
+                              <>
+                                   <dt>Rating</dt>
+                                   <dd>{s.rating}</dd>
+                              </>
+                         )}
                          {s.background && (
                               <>
                                    <dt>Background</dt>
@@ -169,7 +223,7 @@ export const ShowModal = () => {
                          )}
                     </dl>
 
-                    {s.type !== "Movie" && (s.episodes || 0) > 1 && <CatchUp key={s.mal_id} show={s} />}
+                    {s.type !== "Movie" && ((s.episodes || 0) > 1 || s.airing) && <CatchUp key={s.mal_id} show={s} />}
                </Modal.Body>
           </Modal>
      );

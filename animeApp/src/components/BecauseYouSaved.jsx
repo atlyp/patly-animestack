@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { aiBecause, posterOf, titleOf } from "../api";
-import { setFocusedShow } from "../redux/animeSlice";
+import { mergeShows, setFocusedShow } from "../redux/animeSlice";
 import { ListButton } from "./ListButton";
 
 export const BecauseYouSaved = ({ savedIds, avoidIds = [] }) => {
@@ -15,7 +15,11 @@ export const BecauseYouSaved = ({ savedIds, avoidIds = [] }) => {
           let live = true;
           setState({ status: "loading" });
           aiBecause(savedIds, avoidIds)
-               .then((data) => live && setState({ status: "done", ...data }))
+               .then((data) => {
+                    if (!live) return;
+                    dispatch(mergeShows(data.picks.map((p) => p.show).filter(Boolean)));
+                    setState({ status: "done", ...data });
+               })
                .catch((e) => live && setState({ status: "error", message: e.message }));
           return () => {
                live = false;
@@ -49,7 +53,7 @@ export const BecauseYouSaved = ({ savedIds, avoidIds = [] }) => {
                {state.status === "done" && (
                     <div className="pick-grid">
                          {state.picks.map((pick, i) => {
-                              const show = byId.get(pick.mal_id);
+                              const show = byId.get(pick.mal_id) || pick.show;
                               if (!show) return null;
                               return (
                                    <article key={pick.mal_id} className="pick-card" style={{ animationDelay: `${i * 80}ms` }}>

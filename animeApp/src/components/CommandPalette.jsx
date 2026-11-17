@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Modal from "react-bootstrap/Modal";
 import { useDispatch, useSelector } from "react-redux";
 import { useLocation, useNavigate } from "react-router";
-import { setAiQuery, setFocusedShow } from "../redux/animeSlice";
-import { posterOf, titleOf } from "../api";
+import { mergeShows, setAiQuery, setFocusedShow } from "../redux/animeSlice";
+import { posterOf, searchCatalog, titleOf } from "../api";
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 export const shortcutLabel = isMac ? "⌘K" : "Ctrl K";
@@ -44,17 +44,41 @@ export const CommandPalette = () => {
           };
      }, []);
 
+     // Also search the full catalog once typing pauses.
+     const [remote, setRemote] = useState({ q: "", items: [] });
+     useEffect(() => {
+          const query = q.trim();
+          if (query.length < 2) return;
+          let live = true;
+          const t = setTimeout(() => {
+               searchCatalog({ q: query })
+                    .then((data) => {
+                         if (!live) return;
+                         dispatch(mergeShows(data.items));
+                         setRemote({ q: query, items: data.items.slice(0, 7) });
+                    })
+                    .catch(() => {});
+          }, 250);
+          return () => {
+               live = false;
+               clearTimeout(t);
+          };
+     }, [q]);
+
      const items = useMemo(() => {
           const query = q.trim().toLowerCase();
           const list = [];
-          const matches = query
+          const local = query
                ? shows
-                      .map((s) => ({ s, score: Math.max(fuzzy(titleOf(s), query), fuzzy(s.title, query)) }))
+                      .map((s) => ({ s, score: Math.max(fuzzy(titleOf(s) || "", query), fuzzy(s.title || "", query)) }))
                       .filter((x) => x.score >= 0)
                       .sort((a, b) => b.score - a.score)
                       .slice(0, 7)
                       .map((x) => x.s)
                : [...shows].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 6);
+          // catalog results first (best relevance), then anything already loaded that matched
+          const fromServer = query && remote.q.toLowerCase() === query ? remote.items : [];
+          const matches = [...fromServer, ...local.filter((s) => !fromServer.some((r) => r.mal_id === s.mal_id))].slice(0, 7);
           matches.forEach((s) => list.push({ kind: "show", show: s }));
           if (query.length >= 3) {
                // descriptions ("cozy fantasy…") lead with AI; title lookups lead with the titles
@@ -63,7 +87,7 @@ export const CommandPalette = () => {
                else list.push(ai);
           }
           return list;
-     }, [q, shows]);
+     }, [q, shows, remote]);
 
      useEffect(() => setActive(0), [q]);
 
@@ -112,7 +136,7 @@ export const CommandPalette = () => {
                     <kbd>esc</kbd>
                </div>
                <ul className="palette__list" role="listbox">
-                    {!q && <li className="palette__section">Top rated</li>}
+                    {!q && items.length > 0 && <li className="palette__section">Top rated so far</li>}
                     {items.map((item, i) => (
                          <li
                               key={item.kind === "ai" ? "ai" : item.show.mal_id}
@@ -132,7 +156,7 @@ export const CommandPalette = () => {
                                         <img src={posterOf(item.show)} alt="" />
                                         <span className="palette__title">{titleOf(item.show)}</span>
                                         <span className="palette__meta">
-                                             ★ {item.show.score} · {item.show.year || new Date(item.show.aired?.from).getFullYear()}
+                                             ★ {item.show.score ?? "–"} · {item.show.year || (item.show.aired?.from ? new Date(item.show.aired.from).getFullYear() : "?")}
                                         </span>
                                    </>
                               )}

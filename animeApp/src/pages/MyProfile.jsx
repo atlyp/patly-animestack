@@ -10,7 +10,7 @@ import { useState } from "react";
 import { ChangePfp } from "../components/ChangePfp.jsx";
 import { BecauseYouSaved } from "../components/BecauseYouSaved.jsx";
 import { TasteCard } from "../components/TasteCard.jsx";
-import { clearSession, removeFromMyList, titleOf } from "../api";
+import { clearSession, posterOf, removeFromMyList, titleOf } from "../api";
 import { ProgressControls } from "../components/ProgressControls.jsx";
 import { STATUSES, statusLabel } from "../progress";
 import { setFocusedShow } from "../redux/animeSlice";
@@ -100,11 +100,11 @@ export const MyProfile = () => {
                                                             type="button"
                                                             className="mylist-card__art"
                                                             onClick={() => {
-                                                                 const full = shows.find((x) => x.mal_id === show.mal_id);
+                                                                 const full = shows.find((x) => x.mal_id === show.mal_id) || show.snapshot;
                                                                  if (full) dispatch(setFocusedShow(full));
                                                             }}
                                                        >
-                                                            <img src={`/anime_covers/${show.mal_id}.jpg`} alt="" />
+                                                            <img src={posterOf(show)} alt="" loading="lazy" />
                                                        </button>
                                                        <div className="mylist-card__body">
                                                             <h3>{titleOf(shows.find((x) => x.mal_id === show.mal_id) || show)}</h3>

@@ -10,20 +10,13 @@ import { Avatar } from "./Avatar";
 import { useLocation } from "react-router";
 import { SearchEl } from "./SearchEl";
 import { shortcutLabel } from "./CommandPalette";
+import { GENRES, SORTS } from "../catalog";
 
 export const NavbarEl = () => {
      const location = useLocation();
-     // console.log(location.pathname);
      const { loggedIn } = useSelector((state) => state.userKey);
-
      const dispatch = useDispatch();
 
-     const handleGenre = (genre) => {
-          return dispatch(setGenreFilter(genre));
-     };
-     const handleSort = (method) => {
-          return dispatch(setWayToSort(method));
-     };
      return (
           <Navbar collapseOnSelect expand="lg" className="app-navbar">
                <Container className="app-navbar__container">
@@ -32,71 +25,27 @@ export const NavbarEl = () => {
                     </Navbar.Brand>
 
                     <Navbar.Toggle aria-controls="responsive-navbar-nav" />
-                         <Navbar.Collapse id="responsive-navbar-nav">
-                              <Nav className="me-auto">
-                                   <Nav.Link href="/dashboard" className="browse-link">
-                                        Browse
-                                   </Nav.Link>
+                    <Navbar.Collapse id="responsive-navbar-nav">
+                         <Nav className="me-auto">
+                              <Nav.Link href="/dashboard" className="browse-link">
+                                   Browse
+                              </Nav.Link>
                               {location.pathname == "/dashboard" && (
                                    <>
                                         <SearchEl />
                                         <NavDropdown title="Pick a Genre">
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  All
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  Adventure
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  Award Winning
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  Drama
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  Fantasy
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  Action
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  Mystery
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  Supernatural
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  Sci-Fi
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  Suspense
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  Comedy
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  Romance
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleGenre(e.target.text)}>
-                                                  Sports
-                                             </NavDropdown.Item>
+                                             {["All", ...GENRES].map((genre) => (
+                                                  <NavDropdown.Item key={genre} onClick={() => dispatch(setGenreFilter(genre))}>
+                                                       {genre}
+                                                  </NavDropdown.Item>
+                                             ))}
                                         </NavDropdown>
                                         <NavDropdown title="Sort By . . . ">
-                                             <NavDropdown.Item onClick={(e) => handleSort(e.target.text)}>
-                                                  A-Z
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleSort(e.target.text)}>
-                                                  Z-A
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleSort(e.target.text)}>
-                                                  Newest To Oldest
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleSort(e.target.text)}>
-                                                  Oldest To Newest
-                                             </NavDropdown.Item>
-                                             <NavDropdown.Item onClick={(e) => handleSort(e.target.text)}>
-                                                  Score
-                                             </NavDropdown.Item>
+                                             {Object.keys(SORTS).map((label) => (
+                                                  <NavDropdown.Item key={label} onClick={() => dispatch(setWayToSort(label))}>
+                                                       {label}
+                                                  </NavDropdown.Item>
+                                             ))}
                                         </NavDropdown>
                                    </>
                               )}

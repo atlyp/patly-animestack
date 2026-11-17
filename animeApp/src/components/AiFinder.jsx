@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { aiFind, posterOf, titleOf } from "../api";
-import { setAiQuery, setFocusedShow } from "../redux/animeSlice";
+import { mergeShows, setAiQuery, setFocusedShow } from "../redux/animeSlice";
 import { ListButton } from "./ListButton";
 
 const MOODS = [
@@ -43,6 +43,7 @@ export const AiFinder = () => {
           try {
                const saved = (userLoggedIn?.myShows || []).map((s) => s.mal_id);
                const data = await aiFind(q, saved);
+               dispatch(mergeShows(data.picks.map((p) => p.show).filter(Boolean)));
                setState({ status: "done", ...data });
           } catch (e) {
                setState({
@@ -137,7 +138,7 @@ export const AiFinder = () => {
                          <p className="ai-results__intro">{state.intro}</p>
                          <div className="pick-grid">
                               {state.picks.map((pick, i) => {
-                                   const show = byId.get(pick.mal_id);
+                                   const show = byId.get(pick.mal_id) || pick.show;
                                    if (!show) return null;
                                    return (
                                         <article key={pick.mal_id} className="pick-card" style={{ animationDelay: `${i * 80}ms` }}>
@@ -148,7 +149,7 @@ export const AiFinder = () => {
                                              <div className="pick-card__body">
                                                   <h3>{titleOf(show)}</h3>
                                                   <span className="pick-card__meta">
-                                                       ★ {show.score} · {show.type === "Movie" ? "Movie" : `${show.episodes ?? "?"} eps`} · {show.year || new Date(show.aired?.from).getFullYear()}
+                                                       ★ {show.score ?? "–"} · {show.type === "Movie" ? "Movie" : `${show.episodes ?? "?"} eps`} · {show.year || (show.aired?.from ? new Date(show.aired.from).getFullYear() : "?")}
                                                   </span>
                                                   <p>{pick.reason}</p>
                                                   <div className="pick-card__actions">

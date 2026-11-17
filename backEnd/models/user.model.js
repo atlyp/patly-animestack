@@ -1,4 +1,6 @@
 import mongoose from "mongoose";
+import { BY_ID } from "../catalog.js";
+import { slim } from "../anilist.js";
 export const showSchema = new mongoose.Schema({
      mal_id: Number,
      title: String,
@@ -12,6 +14,8 @@ export const showSchema = new mongoose.Schema({
      episodesWatched: { type: Number, default: 0, min: 0 },
      status: { type: String, enum: ["plan", "watching", "completed", "dropped"], default: "plan" },
      progressUpdatedAt: Date,
+     // a copy of the show's details at save time, so My List renders without extra lookups
+     snapshot: mongoose.Schema.Types.Mixed,
 });
 const userSchema = new mongoose.Schema(
      {
@@ -25,8 +29,12 @@ const userSchema = new mongoose.Schema(
      { timestamps: true },
 );
 // Never send the password hash to a client.
+// Shows saved before snapshots existed all came from the bundled catalog, so fill those in.
 const hidePassword = (doc, ret) => {
      delete ret.password;
+     for (const entry of ret.myShows || []) {
+          if (!entry.snapshot && BY_ID.has(entry.mal_id)) entry.snapshot = slim(BY_ID.get(entry.mal_id));
+     }
      return ret;
 };
 userSchema.set("toJSON", { transform: hidePassword });

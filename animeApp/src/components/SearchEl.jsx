@@ -1,40 +1,20 @@
-import { useEffect, useState } from "react";
 import FloatingLabel from "react-bootstrap/FloatingLabel";
 import Form from "react-bootstrap/Form";
 import { useDispatch, useSelector } from "react-redux";
-import { setGenreFilter, setSearchedShows, setWhatWasSearched } from "../redux/animeSlice";
+import { setWhatWasSearched } from "../redux/animeSlice";
 
+// Typing here searches the whole catalog (Animes.jsx runs the search once typing pauses).
 export function SearchEl() {
-     const { shows, whatWasSearched } = useSelector((state) => state.animeKey);
-     //  console.log(filteredShows.map((show) => show.titles.filter((title) => title)));
+     const { whatWasSearched } = useSelector((state) => state.animeKey);
      const dispatch = useDispatch();
-     useEffect(() => {
-          if (whatWasSearched == "") {
-               dispatch(setSearchedShows(shows));
-               //   if they didn't search anything
-               //   show us all shows
-          } else {
-               dispatch(setGenreFilter('All'))
-               //   otherwise
-               dispatch(
-                    setSearchedShows(
-                         shows.filter((singleShow) => singleShow?.title.toLowerCase().includes(whatWasSearched)),
-                    ),
-                    //    filter our shows to what they searched
-               );
-          }
-     }, [whatWasSearched]);
      return (
-          <>
-               <FloatingLabel controlId="floatingSearchInput" label="Search . . " className="mx-5">
-                    <Form.Control
-                         onChange={(e) => {
-                              dispatch(setWhatWasSearched(e.target.value));
-                         }}
-                         type="text"
-                         placeholder=""
-                    />
-               </FloatingLabel>
-          </>
+          <FloatingLabel controlId="floatingSearchInput" label="Search every anime . ." className="mx-5">
+               <Form.Control
+                    value={whatWasSearched}
+                    onChange={(e) => dispatch(setWhatWasSearched(e.target.value))}
+                    type="search"
+                    placeholder=""
+               />
+          </FloatingLabel>
      );
 }

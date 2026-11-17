@@ -7,6 +7,7 @@ const H = 1350;
 const loadImage = (src) =>
      new Promise((resolve) => {
           const img = new Image();
+          img.crossOrigin = "anonymous"; // AniList posters, so the canvas can still be exported
           img.onload = () => resolve(img);
           img.onerror = () => resolve(null);
           img.src = src;

@@ -8,6 +8,7 @@ import userRoutes from "./routes/userRoutes.js";
 import helmet from "helmet";
 import showRoutes from "./routes/showRoutes.js";
 import aiRoutes from "./routes/aiRoutes.js";
+import catalogRoutes from "./routes/catalogRoutes.js";
 
 
 const app = express();
@@ -32,10 +33,18 @@ app.use(["/user", "/shows"], async (req, res, next) => {
           next(error);
      }
 });
+// The catalog and AI only use the database as a cache, so they keep working without it.
+app.use(["/catalog", "/ai"], async (req, res, next) => {
+     await Promise.race([connectDB(), new Promise((r) => setTimeout(r, 3000))]).catch((e) =>
+          console.warn("[db] cache unavailable:", e.message),
+     );
+     next();
+});
 
 app.use("/user", userRoutes);
 app.use("/shows", showRoutes);
 app.use("/ai", aiRoutes);
+app.use("/catalog", catalogRoutes);
 app.use((error, req, res, next) => {
      console.error("API request failed:", error.message);
      const status = error.code === "LIMIT_FILE_SIZE" ? 413 : error.status || 500;

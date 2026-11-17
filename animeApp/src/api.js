@@ -73,8 +73,23 @@ export const removeFromMyList = (show) => send("DELETE", "/shows/deleteFromMyLis
 // Watch progress: { episodesWatched?, status? } → the updated saved-show entry
 export const updateProgress = (mal_id, patch) => send("PATCH", "/shows/progress", { mal_id, ...patch });
 
-export const posterOf = (show) => `/anime_covers/${show.mal_id}.jpg`;
-export const titleOf = (show) => show?.title_english || show?.title;
+// ── Full catalog (AniList, via backEnd/routes/catalogRoutes.js) ──
+const qs = (params) =>
+     new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== "" && !(Array.isArray(v) && !v.length))).toString();
+// { q, genres: [], sort, status, page } → { items, hasNext }
+export const searchCatalog = (params) => apiRequest(`/catalog/search?${qs({ ...params, genres: params.genres?.join(",") })}`);
+export const getAnime = (mal_id) => apiRequest(`/catalog/anime/${mal_id}`);
+export const getTonight = () => apiRequest("/shows/tonight");
+
+// Saved entries carry a snapshot of the show; catalog shows are the show itself.
+export const showOf = (x) => x?.snapshot || x;
+// AniList posters come from its CDN; the original 74 shows have local covers.
+export const posterOf = (x) => {
+     const s = showOf(x);
+     const url = s?.images?.jpg?.large_image_url;
+     return url && url.includes("anilist") ? url : `/anime_covers/${s?.mal_id}.jpg`;
+};
+export const titleOf = (x) => showOf(x)?.title_english || showOf(x)?.title;
 
 export const profileImageUrl = (imagePath) =>
      /^[\da-f]{24}$/i.test(imagePath || "")

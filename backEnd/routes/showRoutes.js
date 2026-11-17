@@ -2,7 +2,8 @@ import express from "express";
 import { showSchema } from "../models/user.model.js";
 import mongoose from "mongoose";
 import User from "../models/user.model.js";
-import { BY_ID, totalEpisodes } from "../catalog.js";
+import { getByMalIds, getShow, slim } from "../anilist.js";
+import { tonightFor } from "../schedule.js";
 import { requireAuth } from "../auth.js";
 const Show = mongoose.model("Show", showSchema);
 
@@ -16,12 +17,25 @@ router.get("/getAllShows", async (req, res) => {
      }
 });
 // Every My List route acts on the logged-in user (from the token), never on an id the client sends.
-router.use(["/addToList", "/deleteFromMyList", "/progress"], requireAuth);
+router.use(["/addToList", "/deleteFromMyList", "/progress", "/tonight"], requireAuth);
 
-// Body: { mal_id }. Show details come from the catalog, not from the client.
+// Total episodes (movies count as 1); null while unknown (e.g. still airing).
+const totalOf = (show) => {
+     if (!show) return null;
+     if (show.type === "Movie") return 1;
+     return Number.isInteger(show.episodes) && show.episodes > 0 ? show.episodes : null;
+};
+
+// Body: { mal_id }. Show details come from AniList (or the bundled catalog), never from the client.
 router.post("/addToList", async (req, res) => {
      const malId = Number(req.body?.mal_id ?? req.body?.showToAdd?.mal_id);
-     const show = BY_ID.get(malId);
+     if (!Number.isInteger(malId) || malId <= 0) return res.status(400).json({ error: "Unknown show." });
+     let show;
+     try {
+          show = await getShow(malId);
+     } catch {
+          show = null;
+     }
      if (!show) return res.status(400).json({ error: "Unknown show." });
      try {
           const entry = {
@@ -29,10 +43,9 @@ router.post("/addToList", async (req, res) => {
                title: show.title,
                title_japanese: show.title_japanese,
                score: show.score,
-               scored_by: show.scored_by,
-               rank: show.rank,
                members: show.members,
                favorites: show.favorites,
+               snapshot: slim(show),
           };
           // only adds if it's not already there, so double-clicks are harmless
           await User.updateOne({ _id: req.userId, "myShows.mal_id": { $ne: malId } }, { $push: { myShows: entry } });
@@ -97,7 +110,7 @@ router.patch("/progress", async (req, res) => {
      try {
           const user = await User.findOne({ _id: userId, "myShows.mal_id": malId }, { "myShows.$": 1 });
           if (!user) return res.status(404).json({ error: "That show isn't in your list." });
-          const total = totalEpisodes(malId);
+          const total = totalOf(user.myShows[0].snapshot || (await getShow(malId)));
           const { watched, status: nextStatus } = nextProgress(user.myShows[0], total, { episodesWatched, status });
 
           const updated = await User.findOneAndUpdate(
@@ -114,6 +127,23 @@ router.patch("/progress", async (req, res) => {
           res.json({ data: updated.myShows[0], totalEpisodes: total });
      } catch (e) {
           res.status(500).json({ error: "Couldn't save your progress." });
+     }
+});
+
+// What's new for this viewer: saved shows that are airing, with the next episode time
+// and how many aired episodes they haven't marked watched yet.
+router.get("/tonight", async (req, res) => {
+     try {
+          const user = await User.findById(req.userId, { myShows: 1 }).lean();
+          if (!user) return res.status(401).json({ error: "Account not found. Please log in again." });
+          const candidates = (user.myShows || []).filter((x) => x.status !== "completed" && x.status !== "dropped");
+          const shows = await getByMalIds(candidates.map((x) => x.mal_id), { fresh: true });
+          const items = tonightFor(candidates, shows).map((item) => ({ ...item, show: slim(shows.get(item.mal_id)) }));
+          res.set("Cache-Control", "private, max-age=120");
+          res.json({ data: items, now: Date.now() });
+     } catch (e) {
+          console.error("[tonight]", e.message);
+          res.status(502).json({ error: "Couldn't check today's episodes." });
      }
 });
 
