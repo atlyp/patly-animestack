@@ -1,0 +1,17 @@
+{
+  "name": "patly-animestack",
+  "private": true,
+  "workspaces": [
+    "animeApp",
+    "backEnd"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspace anime",
+    "dev": "npm run dev --workspace anime",
+    "dev:api": "npm run dev --workspace backend",
+    "lint": "npm run lint --workspace anime"
+  }
+}

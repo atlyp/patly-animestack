@@ -1,0 +1,3 @@
+logic on client side is for- user exp , interactivity, presentation- 
+server side- security - data integrity and heavy processing
+ https://www.linkedin.com/in/rammcodes/

@@ -1,0 +1,1 @@
+will create a global state to remember our shows and reference them- everytime the page loads we will fetch the data from our db and set our state to that

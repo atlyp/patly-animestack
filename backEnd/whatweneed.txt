@@ -1,0 +1,1 @@
+dotenv, mongoose, express cors nodemon 
